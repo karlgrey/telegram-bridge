@@ -49,6 +49,10 @@ export function createBot(deps: BotDeps): Bot {
   });
 
   bot.command('new', async (ctx) => {
+    if (busy) {
+      await ctx.reply('⏳ Ich arbeite noch — /new bitte nochmal schicken, wenn ich fertig bin.');
+      return;
+    }
     state.clearSession();
     await ctx.reply('🆕 Frische Session gestartet.');
   });
@@ -79,17 +83,35 @@ export function createBot(deps: BotDeps): Bot {
     new Promise((resolve) => {
       const id = randomUUID().slice(0, 8);
       const preview = JSON.stringify(input, null, 2).slice(0, 800);
+      // message_id der Go-Nachricht, damit der Timeout-Fall die Buttons entfernen kann
+      let messageId: number | undefined;
       const timer = setTimeout(() => {
-        if (pendingGos.delete(id)) resolve(false);
+        if (pendingGos.delete(id)) {
+          resolve(false);
+          if (messageId !== undefined) {
+            bot.api.editMessageReplyMarkup(chatId, messageId, undefined).catch(() => {});
+          }
+        }
       }, GO_TIMEOUT_MS);
       pendingGos.set(id, (ok) => {
         clearTimeout(timer);
         resolve(ok);
       });
-      void bot.api.sendMessage(chatId, `🚦 Go nötig für ${toolName}:\n\`\`\`\n${preview}\n\`\`\``, {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('✅ Go', `yes:${id}`).text('❌ Stopp', `no:${id}`),
-      });
+      // Versand awaiten statt fire-and-forget: ein Sende-Fehler (429, Netzwerk, …)
+      // darf den Prozess nie crashen — im Fehlerfall wird die Runde mit "deny" fortgesetzt.
+      void (async () => {
+        try {
+          const sent = await bot.api.sendMessage(chatId, `🚦 Go nötig für ${toolName}:\n\n${preview}`, {
+            reply_markup: new InlineKeyboard().text('✅ Go', `yes:${id}`).text('❌ Stopp', `no:${id}`),
+          });
+          messageId = sent.message_id;
+        } catch {
+          if (pendingGos.delete(id)) {
+            clearTimeout(timer);
+            resolve(false);
+          }
+        }
+      })();
     });
 
   bot.on('message', async (ctx) => {
