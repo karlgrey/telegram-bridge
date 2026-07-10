@@ -6,7 +6,7 @@ export function startNotifyServer(opts: {
   token: string;
   send: (text: string) => Promise<void>;
 }): void {
-  createServer((req, res) => {
+  const server = createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/notify') {
       res.writeHead(404).end();
       return;
@@ -27,5 +27,8 @@ export function startNotifyServer(opts: {
         res.writeHead(400).end(String(err));
       }
     });
-  }).listen(opts.port, '127.0.0.1');
+  });
+  // Fehler abfangen (z. B. Port-Konflikt EADDRINUSE) — Daemon läuft ohne /notify weiter.
+  server.on('error', (err) => console.error('notify-Server-Fehler (läuft ohne /notify weiter):', err.message));
+  server.listen(opts.port, '127.0.0.1');
 }
