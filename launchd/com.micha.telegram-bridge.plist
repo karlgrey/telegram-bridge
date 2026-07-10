@@ -5,11 +5,13 @@
   <key>Label</key><string>com.micha.telegram-bridge</string>
   <!-- WICHTIG: WorkingDirectory muss die Repo-Wurzel sein — main.ts löst .env/config/ relativ zum cwd auf -->
   <key>WorkingDirectory</key><string>/Users/mca/Development/telegram-bridge</string>
+  <!-- Login-Shell (-l), damit der Homebrew-PATH da ist — launchd kennt ihn nicht
+       (Muster von der WhatsApp-Bridge; direkter npx-Aufruf scheiterte mit "env: node not found") -->
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/npx</string>
-    <string>tsx</string>
-    <string>src/main.ts</string>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd $HOME/Development/telegram-bridge &amp;&amp; npx tsx src/main.ts</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
