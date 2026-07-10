@@ -1,11 +1,27 @@
 import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { unlink } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import type { Context } from 'grammy';
 
-const INBOX = resolve('data/inbox');
-const OUTBOX = resolve('data/outbox');
+// Pfade am Repo-Root verankern (nicht am process.cwd()), damit der Daemon
+// unabhängig vom Startverzeichnis funktioniert.
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const INBOX = join(MODULE_DIR, '..', 'data', 'inbox');
+const OUTBOX = join(MODULE_DIR, '..', 'data', 'outbox');
+
+/**
+ * Von Telegram gelieferte Dateinamen auf einen sicheren Basisnamen reduzieren
+ * (kein Path-Traversal, keine Sonderzeichen außerhalb des Whitelist-Sets).
+ */
+export function safeName(name: string): string {
+  const base = basename(name);
+  const cleaned = base.replace(/[^A-Za-z0-9._äöüÄÖÜß-]/g, '_');
+  const isEmptyOrOnlyDots = cleaned.length === 0 || /^\.+$/.test(cleaned);
+  return isEmptyOrOnlyDots ? 'datei' : cleaned;
+}
 
 /** Foto/Dokument der Nachricht nach data/inbox/<datum>/ laden. */
 export async function saveIncoming(ctx: Context, token: string): Promise<string | undefined> {
@@ -18,11 +34,17 @@ export async function saveIncoming(ctx: Context, token: string): Promise<string 
   const day = new Date().toISOString().slice(0, 10);
   const dir = join(INBOX, day);
   mkdirSync(dir, { recursive: true });
-  const name = doc?.file_name ?? `photo-${Date.now()}.jpg`;
+  const name = safeName(doc?.file_name ?? `photo-${Date.now()}.jpg`);
   const target = join(dir, `${Date.now()}-${name}`);
   const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
   if (!res.ok || !res.body) throw new Error(`Telegram-Download fehlgeschlagen: ${res.status}`);
-  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(target));
+  try {
+    await pipeline(Readable.fromWeb(res.body as never), createWriteStream(target));
+  } catch (err) {
+    // Best effort: unvollständig geschriebene Datei nicht liegen lassen.
+    await unlink(target).catch(() => {});
+    throw err;
+  }
   return target;
 }
 
