@@ -5,7 +5,7 @@ import { classify, loadGateConfig } from './gate.js';
 import { chunkMessage } from './chunk.js';
 import { StateStore } from './state.js';
 import { runTurn, type CanUseTool } from './agent.js';
-import { saveIncoming, flushOutbox } from './media.js';
+import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 
 export type BotDeps = { token: string; allowedUserId: number; gatePath: string; statePath: string };
 
@@ -33,6 +33,9 @@ async function replyWithBackoff(ctx: Context, text: string): Promise<void> {
 
 export function createBot(deps: BotDeps): Bot {
   const bot = new Bot(deps.token);
+  // Unbehandelte Fehler aus Handlern nie den Prozess crashen lassen — nur das
+  // betroffene Update überspringen und weiterlaufen (grammY-Fehlerkanal).
+  bot.catch((err) => console.error('Bot-Fehler (Update übersprungen):', err));
   const state = new StateStore(deps.statePath);
   const gate = loadGateConfig(deps.gatePath);
   const pendingGos = new Map<string, (ok: boolean) => void>();
@@ -131,7 +134,7 @@ export function createBot(deps: BotDeps): Bot {
       }
       prompt +=
         '\n\n[Kontext: Nachricht kommt via Telegram-Bridge. Antworte kompakt und mobiltauglich. ' +
-        'Dateien für Micha nach data/outbox/ im telegram-bridge-Repo legen.]';
+        `Dateien für Micha nach ${OUTBOX} legen.]`;
 
       const canUseTool: CanUseTool = async (toolName, input) => {
         if (classify(gate, toolName, input) === 'go') {

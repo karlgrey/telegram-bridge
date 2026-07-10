@@ -3,8 +3,8 @@
     { "tool": "Bash", "pattern": "--send" },
     { "tool": "Bash", "pattern": "api\\.resend\\.com" },
     { "tool": "Bash", "pattern": "osascript(.|\\n)*(send|move|delete)" },
-    { "tool": "Bash", "pattern": "git push (?!backup)" },
-    { "tool": "Bash", "pattern": "curl(.|\\n)*-X (POST|PATCH|PUT|DELETE)(.|\\n)*(?!tasks\\.remoterepublic\\.com)" }
+    { "tool": "Bash", "pattern": "git push(?!\\s+backup\\b)" },
+    { "tool": "Bash", "pattern": "^(?![\\s\\S]*tasks\\.remoterepublic\\.com)[\\s\\S]*curl[\\s\\S]*-X (POST|PATCH|PUT|DELETE)" }
   ],
   "note": "Muster werden case-insensitive als Regex gegen JSON.stringify(input) geprüft. tasks.remoterepublic.com ist Alltagsarbeit und bleibt auto-allow."
 }

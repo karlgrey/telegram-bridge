@@ -10,7 +10,9 @@ import type { Context } from 'grammy';
 // unabhängig vom Startverzeichnis funktioniert.
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const INBOX = join(MODULE_DIR, '..', 'data', 'inbox');
-const OUTBOX = join(MODULE_DIR, '..', 'data', 'outbox');
+// Exportiert, damit andere Module (z. B. bot.ts für den Prompt-Kontext) denselben
+// absoluten Pfad referenzieren können — vermeidet Mehrdeutigkeit ggü. process.cwd().
+export const OUTBOX = join(MODULE_DIR, '..', 'data', 'outbox');
 
 /**
  * Von Telegram gelieferte Dateinamen auf einen sicheren Basisnamen reduzieren

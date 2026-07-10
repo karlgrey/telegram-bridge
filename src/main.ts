@@ -14,6 +14,7 @@ if (existsSync('.env')) {
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN fehlt (.env)');
 if (!existsSync('config/config.json')) throw new Error('config/config.json fehlt (Vorlage: config.example.json)');
+if (!existsSync('config/gate.json')) throw new Error('config/gate.json fehlt (Vorlage: gate.example.json)');
 const { allowedUserId } = JSON.parse(readFileSync('config/config.json', 'utf8'));
 if (!allowedUserId) throw new Error('allowedUserId fehlt/0 — Whitelist-Default ist leer.');
 
@@ -34,4 +35,7 @@ if (process.env.NOTIFY_TOKEN) {
 }
 
 console.log('telegram-bridge: starte long-polling …');
-void bot.start();
+bot.start().catch((err) => {
+  console.error('Fataler Start-/Polling-Fehler:', err);
+  process.exit(1);
+});

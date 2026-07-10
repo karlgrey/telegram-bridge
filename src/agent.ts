@@ -26,6 +26,16 @@ export async function runTurn(opts: RunTurnOptions): Promise<string> {
     options: {
       cwd: CWD,
       resume: opts.state.getSessionId(),
+      // ACHTUNG — zwei bekannte blinde Flecken des Go-Gates (siehe README,
+      // Abschnitt "Grenzen des Go-Gates"):
+      // 1. `acceptEdits` genehmigt datei-editierende Tools (Write/Edit/…) automatisch
+      //    auf SDK-Ebene, bevor `canUseTool` überhaupt feuert — das Gate sieht diese
+      //    Calls nie und kann sie folglich nie stoppen.
+      // 2. `settingSources: ['user', 'project']` zieht Allow-Regeln aus Michas/dem
+      //    Projekt-Settings (z. B. `.claude/settings.json`) — dort erlaubte Tools
+      //    umgehen den `canUseTool`-Hook ebenfalls.
+      // In der Praxis gated das Go-Gate damit zuverlässig nur Bash & Co., nicht
+      // jeden möglichen Tool-Call.
       permissionMode: 'acceptEdits',
       settingSources: ['user', 'project'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
@@ -35,7 +45,7 @@ export async function runTurn(opts: RunTurnOptions): Promise<string> {
       // kompatibel zur `allow`/`deny`-Variante von `PermissionResult`.
       canUseTool: async (toolName, input) => {
         opts.onProgress?.(`🔧 ${toolName}`);
-        return opts.canUseTool(toolName, input as Record<string, unknown>);
+        return opts.canUseTool(toolName, input);
       },
     },
   });
