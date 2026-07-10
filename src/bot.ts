@@ -1,4 +1,4 @@
-import { Bot, GrammyError, InlineKeyboard, InputFile, type Context } from 'grammy';
+import { Bot, GrammyError, InlineKeyboard, InputFile, type Context, type Filter } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { classify, loadGateConfig } from './gate.js';
@@ -117,7 +117,16 @@ export function createBot(deps: BotDeps): Bot {
       })();
     });
 
-  bot.on('message', async (ctx) => {
+  // WICHTIG: grammY verarbeitet Updates sequenziell (bot.js: for-Schleife über
+  // handleUpdates). Der Turn darf die Update-Schleife deshalb NICHT blockieren —
+  // sonst kann der Go/Stopp-Button-Callback (selbst ein Update) nie verarbeitet
+  // werden und askGo deadlockt bis zum Timeout (Live-Fund Abnahme 10.07.2026).
+  // Daher: Handler kehrt sofort zurück, der Turn läuft detached weiter.
+  bot.on('message', (ctx) => {
+    void handleMessage(ctx).catch((err) => console.error('Turn-Fehler (detached):', err));
+  });
+
+  const handleMessage = async (ctx: Filter<Context, 'message'>) => {
     if (busy) {
       await ctx.reply('⏳ Ich arbeite noch an der letzten Nachricht — gleich!');
       return;
@@ -158,7 +167,7 @@ export function createBot(deps: BotDeps): Bot {
       clearInterval(typing);
       busy = false;
     }
-  });
+  };
 
   return bot;
 }
