@@ -56,6 +56,19 @@ describe('listSessions', () => {
   it('leerer/fehlender Ordner → leere Liste', async () => {
     expect(await listSessions({ projectDir: '/nix/da', excludeIds: [], now: NOW })).toEqual([]);
   });
+  it('wirft nicht bei null-Elementen im content-Array', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tb-sess-'));
+    fixture(
+      dir,
+      'ddd',
+      [
+        { type: 'user', message: { content: [null, { type: 'text', text: 'trotzdem lesbar' }] } },
+      ],
+      NOW - 60_000,
+    );
+    const result = await listSessions({ projectDir: dir, excludeIds: [], now: NOW });
+    expect(result[0].topic).toBe('trotzdem lesbar');
+  });
 });
 
 describe('formatSessions', () => {

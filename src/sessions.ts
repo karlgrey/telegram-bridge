@@ -32,7 +32,13 @@ async function readTopic(filePath: string): Promise<{ topic: string; startedAt?:
           ? content
           : Array.isArray(content)
             ? content
-                .filter((c): c is { type: string; text: string } => (c as { type?: string }).type === 'text')
+                .filter(
+                  (c): c is { type: string; text: string } =>
+                    typeof c === 'object' &&
+                    c !== null &&
+                    (c as { type?: unknown }).type === 'text' &&
+                    typeof (c as { text?: unknown }).text === 'string',
+                )
                 .map((c) => c.text)
                 .join(' ')
             : '';
@@ -65,7 +71,12 @@ export async function listSessions(opts: {
   for (const f of files) {
     const id = basename(f, '.jsonl');
     if (excluded.has(id)) continue;
-    const mtime = statSync(join(opts.projectDir, f)).mtimeMs;
+    let mtime: number;
+    try {
+      mtime = statSync(join(opts.projectDir, f)).mtimeMs;
+    } catch {
+      continue;
+    }
     if (now - mtime > MAX_AGE_MS) continue;
     const { topic, startedAt } = await readTopic(join(opts.projectDir, f));
     result.push({ id, topic, lastActivity: mtime, startedAt });

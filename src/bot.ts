@@ -82,11 +82,15 @@ export function createBot(deps: BotDeps): BridgeBot {
   });
 
   bot.command('sessions', async (ctx) => {
-    const sessions = await listSessions({
-      projectDir: deps.projectDir,
-      excludeIds: state.getBridgeSessionIds(),
-    });
-    await ctx.reply(formatSessions(sessions, claudeProcessRunning()));
+    try {
+      const sessions = await listSessions({
+        projectDir: deps.projectDir,
+        excludeIds: state.getBridgeSessionIds(),
+      });
+      await ctx.reply(formatSessions(sessions, claudeProcessRunning()));
+    } catch (err) {
+      await ctx.reply(`💥 /sessions fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
   // Go-Gate-Buttons
