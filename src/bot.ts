@@ -214,9 +214,14 @@ export function createBot(deps: BotDeps): BridgeBot {
   };
 
   const sendQuestion = async (text: string, questionId: string): Promise<void> => {
+    // force_reply: öffnet beim Empfänger automatisch den Antworten-Modus —
+    // einfaches Tippen erzeugt so den echten Telegram-Reply, den das Routing
+    // braucht (Live-Fund Abnahme 11.07.2026: direkt getippte Antworten kamen
+    // ohne reply_to_message an und liefen als normaler Agent-Turn).
     const sent = await bot.api.sendMessage(
       deps.allowedUserId,
-      `❓ Rückfrage einer Laptop-Session — antworte per Reply auf DIESE Nachricht:\n\n${text}`,
+      `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${text}`,
+      { reply_markup: { force_reply: true } },
     );
     questions.register(questionId, sent.message_id);
   };
