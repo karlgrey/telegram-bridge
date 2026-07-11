@@ -23,6 +23,7 @@ const bot = createBot({
   allowedUserId,
   gatePath: 'config/gate.json',
   statePath: 'data/state.json',
+  projectDir: `${process.env.HOME}/.claude/projects/-Users-mca-Development-TheBrain2`,
 });
 
 startHeartbeat('data/status.json');

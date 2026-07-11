@@ -6,8 +6,15 @@ import { chunkMessage } from './chunk.js';
 import { StateStore } from './state.js';
 import { runTurn, type CanUseTool } from './agent.js';
 import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
+import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
 
-export type BotDeps = { token: string; allowedUserId: number; gatePath: string; statePath: string };
+export type BotDeps = {
+  token: string;
+  allowedUserId: number;
+  gatePath: string;
+  statePath: string;
+  projectDir: string;
+};
 
 const GO_TIMEOUT_MS = 15 * 60 * 1000;
 const startedAt = Date.now();
@@ -66,6 +73,14 @@ export function createBot(deps: BotDeps): Bot {
       `✅ Bridge läuft seit ${mins} min · Session: ${state.getSessionId() ? 'aktiv' : 'keine'} · ` +
         `beschäftigt: ${busy ? 'ja' : 'nein'} · verworfene Fremd-Nachrichten: ${rejectedCount}`,
     );
+  });
+
+  bot.command('sessions', async (ctx) => {
+    const sessions = await listSessions({
+      projectDir: deps.projectDir,
+      excludeIds: state.getBridgeSessionIds(),
+    });
+    await ctx.reply(formatSessions(sessions, claudeProcessRunning()));
   });
 
   // Go-Gate-Buttons
