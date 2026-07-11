@@ -26,4 +26,18 @@ describe('StateStore', () => {
     writeFileSync(p, '{kaputt');
     expect(new StateStore(p).getSessionId()).toBeUndefined();
   });
+  it('sammelt alle je gesetzten Session-IDs', () => {
+    const p = join(mkdtempSync(join(tmpdir(), 'tb-')), 'state.json');
+    const s = new StateStore(p);
+    s.setSessionId('a');
+    s.setSessionId('b');
+    s.setSessionId('a');
+    s.clearSession();
+    expect(new StateStore(p).getBridgeSessionIds()).toEqual(['a', 'b']);
+  });
+  it('migriert Alt-State: vorhandene sessionId landet in bridgeSessionIds', () => {
+    const p = join(mkdtempSync(join(tmpdir(), 'tb-')), 'state.json');
+    writeFileSync(p, JSON.stringify({ sessionId: 'alt-123' }));
+    expect(new StateStore(p).getBridgeSessionIds()).toEqual(['alt-123']);
+  });
 });
