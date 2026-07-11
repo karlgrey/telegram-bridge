@@ -15,7 +15,8 @@ export class QuestionStore {
   ) {
     if (existsSync(filePath)) {
       try {
-        this.data = JSON.parse(readFileSync(filePath, 'utf8'));
+        const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+        this.data = Array.isArray(parsed) ? parsed : [];
       } catch {
         this.data = [];
       }
@@ -37,6 +38,8 @@ export class QuestionStore {
     if (q.answered) return 'stale';
     q.answered = true;
     mkdirSync(this.answersDir, { recursive: true });
+    // Absichtlich Datei VOR save(): Crash dazwischen kostet schlimmstenfalls eine
+    // Doppel-Antwort in dieselbe Datei — umgekehrt wäre Michas Antwort verloren.
     writeFileSync(join(this.answersDir, `${q.questionId}.txt`), text);
     this.save();
     return 'answered';

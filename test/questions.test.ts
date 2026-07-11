@@ -41,6 +41,12 @@ describe('QuestionStore', () => {
     expect(q2.isOpenQuestion(1)).toBe(true);
     expect(q2.answerByMessageId(2, 'x')).toBe('none');
   });
+  it('überlebt kaputten State (valides JSON, aber kein Array)', () => {
+    const { file, answers } = setup();
+    writeFileSync(file, '{"nicht":"ein array"}');
+    const q = new QuestionStore(file, answers, NOW);
+    expect(q.answerByMessageId(1, 'x')).toBe('none');
+  });
   it('räumt beim Start Antwort-Dateien älter als 24 h auf', () => {
     const { file, answers } = setup();
     mkdirSync(answers, { recursive: true });
