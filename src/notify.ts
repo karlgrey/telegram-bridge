@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 
-/** Lokaler Push-Endpoint: POST /notify {"text":"…"} mit Bearer-Token. */
+/** Lokaler Push-Endpoint: POST /notify {"text":"…", "question_id"?: "…"} mit Bearer-Token. */
 export function startNotifyServer(opts: {
   port: number;
   token: string;
-  send: (text: string) => Promise<void>;
+  send: (text: string, questionId?: string) => Promise<void>;
 }): void {
   const server = createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/notify') {
@@ -19,9 +19,11 @@ export function startNotifyServer(opts: {
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
       try {
-        const { text } = JSON.parse(body);
+        const { text, question_id } = JSON.parse(body);
         if (typeof text !== 'string' || !text.trim()) throw new Error('text fehlt');
-        await opts.send(text);
+        if (question_id !== undefined && !/^[A-Za-z0-9-]{1,64}$/.test(String(question_id)))
+          throw new Error('question_id ungültig (erlaubt: A-Za-z0-9-, max 64)');
+        await opts.send(text, question_id);
         res.writeHead(200).end('ok');
       } catch (err) {
         res.writeHead(400).end(String(err));

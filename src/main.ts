@@ -18,12 +18,18 @@ if (!existsSync('config/gate.json')) throw new Error('config/gate.json fehlt (Vo
 const { allowedUserId } = JSON.parse(readFileSync('config/config.json', 'utf8'));
 if (!allowedUserId) throw new Error('allowedUserId fehlt/0 — Whitelist-Default ist leer.');
 
-const bot = createBot({
+// Kennzeichnung für Hooks: Prozesse dieser Bridge (inkl. SDK-Subprozesse/Hooks
+// der Bridge-Session) melden Freigaben NICHT nochmal via /notify (Task: Go-Gate).
+process.env.TELEGRAM_BRIDGE = '1';
+
+const { bot, sendQuestion } = createBot({
   token,
   allowedUserId,
   gatePath: 'config/gate.json',
   statePath: 'data/state.json',
   projectDir: `${process.env.HOME}/.claude/projects/-Users-mca-Development-TheBrain2`,
+  questionsPath: 'data/questions.json',
+  answersDir: 'data/answers',
 });
 
 startHeartbeat('data/status.json');
@@ -31,7 +37,10 @@ if (process.env.NOTIFY_TOKEN) {
   startNotifyServer({
     port: Number(process.env.NOTIFY_PORT ?? 8787),
     token: process.env.NOTIFY_TOKEN,
-    send: async (text) => void (await bot.api.sendMessage(allowedUserId, text)),
+    send: async (text, questionId) => {
+      if (questionId) await sendQuestion(text, questionId);
+      else await bot.api.sendMessage(allowedUserId, text);
+    },
   });
 }
 

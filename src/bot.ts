@@ -7,6 +7,7 @@ import { StateStore } from './state.js';
 import { runTurn, type CanUseTool } from './agent.js';
 import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
+import { QuestionStore } from './questions.js';
 
 export type BotDeps = {
   token: string;
@@ -14,6 +15,8 @@ export type BotDeps = {
   gatePath: string;
   statePath: string;
   projectDir: string;
+  questionsPath: string;
+  answersDir: string;
 };
 
 const GO_TIMEOUT_MS = 15 * 60 * 1000;
@@ -38,13 +41,16 @@ async function replyWithBackoff(ctx: Context, text: string): Promise<void> {
   }
 }
 
-export function createBot(deps: BotDeps): Bot {
+export type BridgeBot = { bot: Bot; sendQuestion: (text: string, questionId: string) => Promise<void> };
+
+export function createBot(deps: BotDeps): BridgeBot {
   const bot = new Bot(deps.token);
   // Unbehandelte Fehler aus Handlern nie den Prozess crashen lassen — nur das
   // betroffene Update überspringen und weiterlaufen (grammY-Fehlerkanal).
   bot.catch((err) => console.error('Bot-Fehler (Update übersprungen):', err));
   const state = new StateStore(deps.statePath);
   const gate = loadGateConfig(deps.gatePath);
+  const questions = new QuestionStore(deps.questionsPath, deps.answersDir);
   const pendingGos = new Map<string, (ok: boolean) => void>();
   let busy = false;
   let rejectedCount = 0;
@@ -142,6 +148,25 @@ export function createBot(deps: BotDeps): Bot {
   });
 
   const handleMessage = async (ctx: Filter<Context, 'message'>) => {
+    // Reply auf einen Rückfrage-Push? → Antwort-Datei schreiben, kein Agent-Turn.
+    const replyTo = ctx.message?.reply_to_message?.message_id;
+    if (replyTo !== undefined) {
+      const answerText = ctx.message?.text ?? ctx.message?.caption ?? '';
+      if (questions.isOpenQuestion(replyTo) && !answerText.trim()) {
+        await ctx.reply('Bitte als Text antworten — die Session wartet auf eine Text-Antwort.');
+        return;
+      }
+      const verdict = questions.answerByMessageId(replyTo, answerText.trim());
+      if (verdict === 'answered') {
+        await ctx.reply('✔ Antwort an die wartende Session weitergereicht.');
+        return;
+      }
+      if (verdict === 'stale') {
+        await ctx.reply('Diese Frage ist nicht mehr offen (schon beantwortet oder abgelaufen).');
+        return;
+      }
+      // 'none': Reply auf normale Bot-Nachricht → als normale Nachricht behandeln
+    }
     if (busy) {
       await ctx.reply('⏳ Ich arbeite noch an der letzten Nachricht — gleich!');
       return;
@@ -184,5 +209,13 @@ export function createBot(deps: BotDeps): Bot {
     }
   };
 
-  return bot;
+  const sendQuestion = async (text: string, questionId: string): Promise<void> => {
+    const sent = await bot.api.sendMessage(
+      deps.allowedUserId,
+      `❓ Rückfrage einer Laptop-Session — antworte per Reply auf DIESE Nachricht:\n\n${text}`,
+    );
+    questions.register(questionId, sent.message_id);
+  };
+
+  return { bot, sendQuestion };
 }
