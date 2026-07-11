@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 
-/** Lokaler Push-Endpoint: POST /notify {"text":"…", "question_id"?: "…"} mit Bearer-Token. */
+/** Lokaler Push-Endpoint: POST /notify {"text":"…", "question_id"?: "…", "timeout_min"?: n} mit Bearer-Token. */
 export function startNotifyServer(opts: {
   port: number;
   token: string;
-  send: (text: string, questionId?: string) => Promise<void>;
+  send: (text: string, questionId?: string, timeoutMin?: number) => Promise<void>;
 }): void {
   const server = createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/notify') {
@@ -19,11 +19,13 @@ export function startNotifyServer(opts: {
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
       try {
-        const { text, question_id } = JSON.parse(body);
+        const { text, question_id, timeout_min } = JSON.parse(body);
         if (typeof text !== 'string' || !text.trim()) throw new Error('text fehlt');
         if (question_id !== undefined && !/^[A-Za-z0-9-]{1,64}$/.test(String(question_id)))
           throw new Error('question_id ungültig (erlaubt: A-Za-z0-9-, max 64)');
-        await opts.send(text, question_id);
+        if (timeout_min !== undefined && (!Number.isInteger(timeout_min) || timeout_min < 1 || timeout_min > 600))
+          throw new Error('timeout_min ungültig (Ganzzahl 1–600)');
+        await opts.send(text, question_id, timeout_min);
         res.writeHead(200).end('ok');
       } catch (err) {
         res.writeHead(400).end(String(err));

@@ -47,6 +47,27 @@ describe('QuestionStore', () => {
     const q = new QuestionStore(file, answers, NOW);
     expect(q.answerByMessageId(1, 'x')).toBe('none');
   });
+  it('openQuestions liefert nur unbeantwortete, nicht abgelaufene Fragen', () => {
+    const { file, answers } = setup();
+    const q = new QuestionStore(file, answers, NOW);
+    q.register('frisch', 1, NOW, 30);
+    q.register('abgelaufen', 2, NOW - 10 * 60_000, 5);
+    q.register('beantwortet', 3, NOW, 30);
+    q.answerByMessageId(3, 'x');
+    expect(q.openQuestions(NOW).map((r) => r.questionId)).toEqual(['frisch']);
+  });
+  it('Alt-Records ohne expiresAt gelten 30 Min ab Erstellung', () => {
+    const { file, answers } = setup();
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { questionId: 'alt-jung', messageId: 1, createdAt: NOW - 10 * 60_000, answered: false },
+        { questionId: 'alt-alt', messageId: 2, createdAt: NOW - 40 * 60_000, answered: false },
+      ]),
+    );
+    const q = new QuestionStore(file, answers, NOW);
+    expect(q.openQuestions(NOW).map((r) => r.questionId)).toEqual(['alt-jung']);
+  });
   it('räumt beim Start Antwort-Dateien älter als 24 h auf', () => {
     const { file, answers } = setup();
     mkdirSync(answers, { recursive: true });

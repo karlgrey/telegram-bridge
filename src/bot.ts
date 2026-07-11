@@ -41,7 +41,7 @@ async function replyWithBackoff(ctx: Context, text: string): Promise<void> {
   }
 }
 
-export type BridgeBot = { bot: Bot; sendQuestion: (text: string, questionId: string) => Promise<void> };
+export type BridgeBot = { bot: Bot; sendQuestion: (text: string, questionId: string, timeoutMin?: number) => Promise<void> };
 
 export function createBot(deps: BotDeps): BridgeBot {
   const bot = new Bot(deps.token);
@@ -171,6 +171,21 @@ export function createBot(deps: BotDeps): BridgeBot {
       }
       // 'none': Reply auf normale Bot-Nachricht → als normale Nachricht behandeln
     }
+
+    // Fallback (Live-Fund Abnahme 11.07.2026): direkt getippte Antworten tragen
+    // kein reply_to_message, und force_reply greift nicht zuverlässig bei offenem
+    // Chat. Wartet genau EINE Rückfrage (nicht abgelaufen), wird eine normale
+    // Textnachricht als deren Antwort gewertet — mit expliziter Bestätigung,
+    // damit nie etwas still als Antwort verschwindet.
+    if (replyTo === undefined) {
+      const open = questions.openQuestions();
+      const answerText = (ctx.message?.text ?? ctx.message?.caption ?? '').trim();
+      if (open.length === 1 && answerText && !answerText.startsWith('/')) {
+        questions.answerByMessageId(open[0].messageId, answerText);
+        await ctx.reply('✔ Als Antwort auf die offene Rückfrage gewertet und an die wartende Session weitergereicht.');
+        return;
+      }
+    }
     if (busy) {
       await ctx.reply('⏳ Ich arbeite noch an der letzten Nachricht — gleich!');
       return;
@@ -213,7 +228,7 @@ export function createBot(deps: BotDeps): BridgeBot {
     }
   };
 
-  const sendQuestion = async (text: string, questionId: string): Promise<void> => {
+  const sendQuestion = async (text: string, questionId: string, timeoutMin?: number): Promise<void> => {
     // force_reply: öffnet beim Empfänger automatisch den Antworten-Modus —
     // einfaches Tippen erzeugt so den echten Telegram-Reply, den das Routing
     // braucht (Live-Fund Abnahme 11.07.2026: direkt getippte Antworten kamen
@@ -223,7 +238,7 @@ export function createBot(deps: BotDeps): BridgeBot {
       `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${text}`,
       { reply_markup: { force_reply: true } },
     );
-    questions.register(questionId, sent.message_id);
+    questions.register(questionId, sent.message_id, Date.now(), timeoutMin);
   };
 
   return { bot, sendQuestion };

@@ -1,9 +1,16 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-type QuestionRecord = { questionId: string; messageId: number; createdAt: number; answered: boolean };
+type QuestionRecord = {
+  questionId: string;
+  messageId: number;
+  createdAt: number;
+  answered: boolean;
+  expiresAt?: number; // ab dann pollt kein Skript mehr — Alt-Records: createdAt + 30 Min
+};
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_TIMEOUT_MIN = 30;
 
 /** Offene Rückfragen von Laptop-Sessions: Message-ID des Telegram-Pushs → Antwort-Datei. */
 export class QuestionStore {
@@ -25,12 +32,16 @@ export class QuestionStore {
     this.save();
     this.cleanupAnswers(now);
   }
-  register(questionId: string, messageId: number, now = Date.now()): void {
-    this.data.push({ questionId, messageId, createdAt: now, answered: false });
+  register(questionId: string, messageId: number, now = Date.now(), timeoutMin = DEFAULT_TIMEOUT_MIN): void {
+    this.data.push({ questionId, messageId, createdAt: now, answered: false, expiresAt: now + timeoutMin * 60_000 });
     this.save();
   }
   isOpenQuestion(messageId: number): boolean {
     return this.data.some((q) => q.messageId === messageId && !q.answered);
+  }
+  /** Unbeantwortete Fragen, auf die noch ein Skript wartet (nicht abgelaufen). */
+  openQuestions(now = Date.now()): QuestionRecord[] {
+    return this.data.filter((q) => !q.answered && now < (q.expiresAt ?? q.createdAt + DEFAULT_TIMEOUT_MIN * 60_000));
   }
   answerByMessageId(messageId: number, text: string): 'answered' | 'stale' | 'none' {
     const q = this.data.find((r) => r.messageId === messageId);

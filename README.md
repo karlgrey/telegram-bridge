@@ -31,12 +31,16 @@ alle möglichen Tool-Calls, sondern gezielt gegen außenwirksame Bash-Aktionen
   `~/.claude/projects/-Users-mca-Development-TheBrain2/`), Bridge-eigene
   Sessions werden über `data/state.json` (`bridgeSessionIds`) gefiltert.
   🟢 = Transkript <10 Min alt UND ein `claude`-Prozess läuft.
-- **Rückfrage-Kanal** — `POST /notify {"text", "question_id"}` schickt die
+- **Rückfrage-Kanal** — `POST /notify {"text", "question_id", "timeout_min"?}` schickt die
   Frage mit Reply-Aufforderung; Michas Telegram-Reply wird nach
   `data/answers/<question_id>.txt` geschrieben. Absender-Skript:
   `~/Development/TheBrain2/tools/frage-micha.sh` (pollt die Antwort-Datei,
   Session arbeitet im selben Turn weiter). Frage-Records: `data/questions.json`
-  (24-h-Aufräumen beim Start).
+  (24-h-Aufräumen beim Start). Antworten routen per Telegram-Reply ODER — wenn
+  genau eine Frage offen und nicht abgelaufen ist — als direkt getippte
+  Textnachricht (Fallback mit expliziter Bestätigung; Live-Fund 11.07.2026:
+  getippte Antworten tragen kein reply_to_message, force_reply greift nicht
+  zuverlässig).
 - Der Daemon setzt `TELEGRAM_BRIDGE=1`; der Notification-Hook im
   TheBrain2-Repo schweigt dann (sonst doppelte Meldung neben dem Go-Gate).
 

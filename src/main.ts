@@ -37,8 +37,8 @@ if (process.env.NOTIFY_TOKEN) {
   startNotifyServer({
     port: Number(process.env.NOTIFY_PORT ?? 8787),
     token: process.env.NOTIFY_TOKEN,
-    send: async (text, questionId) => {
-      if (questionId) await sendQuestion(text, questionId);
+    send: async (text, questionId, timeoutMin) => {
+      if (questionId) await sendQuestion(text, questionId, timeoutMin);
       else await bot.api.sendMessage(allowedUserId, text);
     },
   });
