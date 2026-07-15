@@ -10,6 +10,7 @@ import { claudeProcessRunning, formatSessions, listSessions } from './sessions.j
 import { QuestionStore } from './questions.js';
 import { PendingReplyStore, sendWithRetry, startPendingFlush } from './send.js';
 import { TurnQueue } from './queue.js';
+import { logError } from './log.js';
 
 export type BotDeps = {
   token: string;
@@ -39,7 +40,7 @@ export function createBot(deps: BotDeps): BridgeBot {
   const bot = new Bot(deps.token);
   // Unbehandelte Fehler aus Handlern nie den Prozess crashen lassen — nur das
   // betroffene Update überspringen und weiterlaufen (grammY-Fehlerkanal).
-  bot.catch((err) => console.error('Bot-Fehler (Update übersprungen):', err));
+  bot.catch((err) => logError('Bot-Fehler (Update übersprungen):', err));
   const state = new StateStore(deps.statePath);
   const gate = loadGateConfig(deps.gatePath);
   const questions = new QuestionStore(deps.questionsPath, deps.answersDir);
@@ -55,7 +56,7 @@ export function createBot(deps: BotDeps): BridgeBot {
       await sendWithRetry(() => bot.api.sendMessage(chatId, text));
     } catch (err) {
       pendingReplies.add(chatId, text);
-      console.error('Send endgültig fehlgeschlagen — Antwort nach pending-replies.json gelegt:', err);
+      logError('Send endgültig fehlgeschlagen — Antwort nach pending-replies.json gelegt:', err);
     }
   };
   // Flush ohne eigenes Retry: klappt der Tick nicht, kommt der nächste in 60 s.
@@ -163,7 +164,7 @@ export function createBot(deps: BotDeps): BridgeBot {
   // (Rückfrage-Antworten) SOFORT und reiht Agent-Turns nur in die Queue ein —
   // deren Abarbeitung läuft detached (TurnQueue.drain), nie in der Update-Schleife.
   bot.on('message', (ctx) => {
-    void routeMessage(ctx).catch((err) => console.error('Routing-Fehler (detached):', err));
+    void routeMessage(ctx).catch((err) => logError('Routing-Fehler (detached):', err));
   });
 
   const routeMessage = async (ctx: Filter<Context, 'message'>) => {
@@ -277,7 +278,7 @@ export function createBot(deps: BotDeps): BridgeBot {
   // runAgentTurn fängt selbst alles — onError ist nur das letzte Sicherheitsnetz,
   // damit die Queue nie stehen bleibt.
   const turnQueue = new TurnQueue<Filter<Context, 'message'>>(runAgentTurn, QUEUE_LIMIT, (err) =>
-    console.error('Turn-Fehler (Queue-Sicherheitsnetz):', err),
+    logError('Turn-Fehler (Queue-Sicherheitsnetz):', err),
   );
 
   const sendQuestion = async (text: string, questionId: string, timeoutMin?: number): Promise<void> => {

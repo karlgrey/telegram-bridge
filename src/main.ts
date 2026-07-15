@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createBot } from './bot.js';
 import { startNotifyServer } from './notify.js';
 import { startHeartbeat } from './status.js';
+import { log, logError } from './log.js';
+import { PollWatchdog } from './watchdog.js';
 
 // .env laden (ohne Dependency)
 if (existsSync('.env')) {
@@ -47,8 +49,36 @@ if (process.env.NOTIFY_TOKEN) {
   });
 }
 
-console.log('telegram-bridge: starte long-polling …');
+// Polling-Watchdog (#198): grammY retried getUpdates-Fehler intern endlos —
+// eine dauerhaft tote Schleife (z. B. SSL kaputt wie am 14.07.) fällt sonst nie
+// auf. Ein API-Transformer sieht jeden getUpdates-Aufruf (bot.js fetchUpdates
+// geht durch this.api → Transformer-Kette, inkl. Netzwerkfehlern); >10 min ohne
+// Erfolg UND letzter Versuch fehlgeschlagen → exit(1), launchd (KeepAlive)
+// startet neu, state.json resumed die Session. Stille (keine Updates) ist
+// unkritisch: der 30-s-Long-Poll liefert leere Listen und zählt als Erfolg.
+const watchdog = new PollWatchdog(10 * 60_000, (silenceMs) => {
+  logError(
+    `Watchdog: ${Math.round(silenceMs / 60_000)} min kein erfolgreicher getUpdates und letzter Versuch ` +
+      'fehlgeschlagen — Polling-Schleife tot, exit(1) für launchd-Neustart.',
+  );
+  process.exit(1);
+});
+bot.api.config.use(async (prev, method, payload, signal) => {
+  if (method !== 'getUpdates') return prev(method, payload, signal);
+  try {
+    const res = await prev(method, payload, signal);
+    if (res.ok) watchdog.recordSuccess();
+    else watchdog.recordFailure(); // Telegram hat geantwortet, aber mit Fehler
+    return res;
+  } catch (err) {
+    watchdog.recordFailure(); // Netzwerk-/Transportfehler (HttpError)
+    throw err;
+  }
+});
+watchdog.start();
+
+log('telegram-bridge: starte long-polling …');
 bot.start().catch((err) => {
-  console.error('Fataler Start-/Polling-Fehler:', err);
+  logError('Fataler Start-/Polling-Fehler:', err);
   process.exit(1);
 });

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { logError } from './log.js';
 
 /** Lokaler Push-Endpoint: POST /notify {"text":"…", "question_id"?: "…", "timeout_min"?: n} mit Bearer-Token. */
 export function startNotifyServer(opts: {
@@ -33,6 +34,6 @@ export function startNotifyServer(opts: {
     });
   });
   // Fehler abfangen (z. B. Port-Konflikt EADDRINUSE) — Daemon läuft ohne /notify weiter.
-  server.on('error', (err) => console.error('notify-Server-Fehler (läuft ohne /notify weiter):', err.message));
+  server.on('error', (err) => logError('notify-Server-Fehler (läuft ohne /notify weiter):', err.message));
   server.listen(opts.port, '127.0.0.1');
 }
