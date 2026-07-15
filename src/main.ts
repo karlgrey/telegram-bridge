@@ -31,6 +31,8 @@ const { bot, sendQuestion, sendText } = createBot({
   questionsPath: 'data/questions.json',
   answersDir: 'data/answers',
   pendingPath: 'data/pending-replies.json',
+  // Optional per .env übersteuerbar (TURN_TIMEOUT_MIN, Minuten) — Default 20 min.
+  turnTimeoutMs: process.env.TURN_TIMEOUT_MIN ? Number(process.env.TURN_TIMEOUT_MIN) * 60_000 : undefined,
 });
 
 startHeartbeat('data/status.json');

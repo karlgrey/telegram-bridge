@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import { classify, loadGateConfig } from './gate.js';
 import { chunkMessage } from './chunk.js';
 import { StateStore } from './state.js';
-import { runTurn, type CanUseTool } from './agent.js';
+import { runTurn, TurnTimeoutError, type CanUseTool } from './agent.js';
 import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
 import { QuestionStore } from './questions.js';
@@ -20,6 +20,8 @@ export type BotDeps = {
   questionsPath: string;
   answersDir: string;
   pendingPath: string;
+  /** Hard-Timeout pro Agent-Turn in ms; Default 20 min (siehe agent.ts, #198). */
+  turnTimeoutMs?: number;
 };
 
 const GO_TIMEOUT_MS = 15 * 60 * 1000;
@@ -237,7 +239,7 @@ export function createBot(deps: BotDeps): BridgeBot {
         return { behavior: 'allow', updatedInput: input };
       };
 
-      const answer = await runTurn({ prompt, state, canUseTool });
+      const answer = await runTurn({ prompt, state, canUseTool, timeoutMs: deps.turnTimeoutMs });
       for (const chunk of chunkMessage(answer)) await sendText(ctx.chat.id, chunk);
       // Dokument-Anhänge: Retry ja, aber keine Persistenz-Schicht nötig — die Datei
       // liegt ohnehin im Outbox-Ordner (flushOutbox verschiebt erst NACH erfolgreichem
@@ -257,10 +259,15 @@ export function createBot(deps: BotDeps): BridgeBot {
     } catch (err) {
       // Fehler-Reply ebenfalls über den robusten Layer — Live-Fund 14.07.2026:
       // genau dieser Reply ging beim SSL/EPROTO-Ausfall mit unter.
-      await sendText(
-        ctx.chat.id,
-        `💥 Fehler: ${err instanceof Error ? err.message : String(err)}\nNotfalls /new probieren.`,
-      );
+      if (err instanceof TurnTimeoutError) {
+        // Queue läuft danach automatisch weiter (finally im TurnQueue-Drain).
+        await sendText(ctx.chat.id, `⏱ ${err.message} — /new falls die Session klemmt.`);
+      } else {
+        await sendText(
+          ctx.chat.id,
+          `💥 Fehler: ${err instanceof Error ? err.message : String(err)}\nNotfalls /new probieren.`,
+        );
+      }
     } finally {
       clearInterval(typing);
     }
