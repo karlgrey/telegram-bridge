@@ -9,6 +9,7 @@ import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
 import { QuestionStore } from './questions.js';
 import { PendingReplyStore, sendWithRetry, startPendingFlush } from './send.js';
+import { TurnQueue } from './queue.js';
 
 export type BotDeps = {
   token: string;
@@ -22,6 +23,7 @@ export type BotDeps = {
 };
 
 const GO_TIMEOUT_MS = 15 * 60 * 1000;
+const QUEUE_LIMIT = 10;
 const startedAt = Date.now();
 
 export type BridgeBot = {
@@ -40,7 +42,6 @@ export function createBot(deps: BotDeps): BridgeBot {
   const gate = loadGateConfig(deps.gatePath);
   const questions = new QuestionStore(deps.questionsPath, deps.answersDir);
   const pendingGos = new Map<string, (ok: boolean) => void>();
-  let busy = false;
   let rejectedCount = 0;
 
   // Robuster Send-Layer (#198): Retry bei transienten Netzwerkfehlern; scheitern
@@ -70,7 +71,7 @@ export function createBot(deps: BotDeps): BridgeBot {
   });
 
   bot.command('new', async (ctx) => {
-    if (busy) {
+    if (turnQueue.busy || turnQueue.length > 0) {
       await ctx.reply('⏳ Ich arbeite noch — /new bitte nochmal schicken, wenn ich fertig bin.');
       return;
     }
@@ -82,7 +83,8 @@ export function createBot(deps: BotDeps): BridgeBot {
     const mins = Math.round((Date.now() - startedAt) / 60000);
     await ctx.reply(
       `✅ Bridge läuft seit ${mins} min · Session: ${state.getSessionId() ? 'aktiv' : 'keine'} · ` +
-        `beschäftigt: ${busy ? 'ja' : 'nein'} · verworfene Fremd-Nachrichten: ${rejectedCount}`,
+        `beschäftigt: ${turnQueue.busy ? 'ja' : 'nein'} · wartend: ${turnQueue.length} · ` +
+        `verworfene Fremd-Nachrichten: ${rejectedCount}`,
     );
   });
 
@@ -155,12 +157,14 @@ export function createBot(deps: BotDeps): BridgeBot {
   // handleUpdates). Der Turn darf die Update-Schleife deshalb NICHT blockieren —
   // sonst kann der Go/Stopp-Button-Callback (selbst ein Update) nie verarbeitet
   // werden und askGo deadlockt bis zum Timeout (Live-Fund Abnahme 10.07.2026).
-  // Daher: Handler kehrt sofort zurück, der Turn läuft detached weiter.
+  // Daher: Handler kehrt sofort zurück; routeMessage bedient die Sonderpfade
+  // (Rückfrage-Antworten) SOFORT und reiht Agent-Turns nur in die Queue ein —
+  // deren Abarbeitung läuft detached (TurnQueue.drain), nie in der Update-Schleife.
   bot.on('message', (ctx) => {
-    void handleMessage(ctx).catch((err) => console.error('Turn-Fehler (detached):', err));
+    void routeMessage(ctx).catch((err) => console.error('Routing-Fehler (detached):', err));
   });
 
-  const handleMessage = async (ctx: Filter<Context, 'message'>) => {
+  const routeMessage = async (ctx: Filter<Context, 'message'>) => {
     // Reply auf einen Rückfrage-Push? → Antwort-Datei schreiben, kein Agent-Turn.
     const replyTo = ctx.message?.reply_to_message?.message_id;
     if (replyTo !== undefined) {
@@ -195,11 +199,21 @@ export function createBot(deps: BotDeps): BridgeBot {
         return;
       }
     }
-    if (busy) {
-      await ctx.reply('⏳ Ich arbeite noch an der letzten Nachricht — gleich!');
-      return;
+    // Kein Sonderpfad → Agent-Turn. Statt Verwerfen bei busy (früher: „⏳ Ich
+    // arbeite noch" und die Nachricht war WEG) jetzt einreihen (#198).
+    const verdict = turnQueue.enqueue(ctx);
+    if (verdict === 'queued') {
+      await ctx.reply(`⏳ Eingereiht (Platz ${turnQueue.length}) — ich melde mich, sobald ich dran bin.`);
+    } else if (verdict === 'full') {
+      await ctx.reply(
+        `🛑 Warteschlange voll (${QUEUE_LIMIT}) — diese Nachricht wurde NICHT angenommen, bitte später erneut schicken.`,
+      );
     }
-    busy = true;
+    // 'started': keine Wartesituation — Verhalten wie bisher, keine Extra-Meldung.
+  };
+
+  /** Ein kompletter Agent-Turn für eine Nachricht — läuft ausschließlich über die Queue. */
+  const runAgentTurn = async (ctx: Filter<Context, 'message'>) => {
     const typing = setInterval(() => void ctx.replyWithChatAction('typing').catch(() => {}), 5000);
     try {
       const mediaPath = await saveIncoming(ctx, deps.token);
@@ -249,9 +263,15 @@ export function createBot(deps: BotDeps): BridgeBot {
       );
     } finally {
       clearInterval(typing);
-      busy = false;
     }
   };
+
+  // Ein Turn zur Zeit (die Claude-Session ist sequenziell), FIFO, Limit 10.
+  // runAgentTurn fängt selbst alles — onError ist nur das letzte Sicherheitsnetz,
+  // damit die Queue nie stehen bleibt.
+  const turnQueue = new TurnQueue<Filter<Context, 'message'>>(runAgentTurn, QUEUE_LIMIT, (err) =>
+    console.error('Turn-Fehler (Queue-Sicherheitsnetz):', err),
+  );
 
   const sendQuestion = async (text: string, questionId: string, timeoutMin?: number): Promise<void> => {
     // force_reply: öffnet beim Empfänger automatisch den Antworten-Modus —
