@@ -22,7 +22,7 @@ if (!allowedUserId) throw new Error('allowedUserId fehlt/0 — Whitelist-Default
 // der Bridge-Session) melden Freigaben NICHT nochmal via /notify (Task: Go-Gate).
 process.env.TELEGRAM_BRIDGE = '1';
 
-const { bot, sendQuestion } = createBot({
+const { bot, sendQuestion, sendText } = createBot({
   token,
   allowedUserId,
   gatePath: 'config/gate.json',
@@ -30,6 +30,7 @@ const { bot, sendQuestion } = createBot({
   projectDir: `${process.env.HOME}/.claude/projects/-Users-mca-Development-TheBrain2`,
   questionsPath: 'data/questions.json',
   answersDir: 'data/answers',
+  pendingPath: 'data/pending-replies.json',
 });
 
 startHeartbeat('data/status.json');
@@ -39,7 +40,7 @@ if (process.env.NOTIFY_TOKEN) {
     token: process.env.NOTIFY_TOKEN,
     send: async (text, questionId, timeoutMin) => {
       if (questionId) await sendQuestion(text, questionId, timeoutMin);
-      else await bot.api.sendMessage(allowedUserId, text);
+      else await sendText(allowedUserId, text); // robust: Retry + Nachliefung (#198)
     },
   });
 }

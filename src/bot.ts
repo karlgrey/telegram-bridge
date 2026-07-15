@@ -1,4 +1,4 @@
-import { Bot, GrammyError, InlineKeyboard, InputFile, type Context, type Filter } from 'grammy';
+import { Bot, InlineKeyboard, InputFile, type Context, type Filter } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { classify, loadGateConfig } from './gate.js';
@@ -8,6 +8,7 @@ import { runTurn, type CanUseTool } from './agent.js';
 import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
 import { QuestionStore } from './questions.js';
+import { PendingReplyStore, sendWithRetry, startPendingFlush } from './send.js';
 
 export type BotDeps = {
   token: string;
@@ -17,31 +18,18 @@ export type BotDeps = {
   projectDir: string;
   questionsPath: string;
   answersDir: string;
+  pendingPath: string;
 };
 
 const GO_TIMEOUT_MS = 15 * 60 * 1000;
 const startedAt = Date.now();
 
-/**
- * `ctx.reply` mit einmaligem Retry bei Telegrams 429 (Flood-Control):
- * wartet die von Telegram vorgegebene `retry_after`-Zeit ab und versucht es
- * genau ein weiteres Mal.
- */
-async function replyWithBackoff(ctx: Context, text: string): Promise<void> {
-  try {
-    await ctx.reply(text);
-  } catch (err) {
-    if (err instanceof GrammyError && err.error_code === 429) {
-      const retryAfter = err.parameters.retry_after ?? 1;
-      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-      await ctx.reply(text);
-      return;
-    }
-    throw err;
-  }
-}
-
-export type BridgeBot = { bot: Bot; sendQuestion: (text: string, questionId: string, timeoutMin?: number) => Promise<void> };
+export type BridgeBot = {
+  bot: Bot;
+  sendQuestion: (text: string, questionId: string, timeoutMin?: number) => Promise<void>;
+  /** Robuster Text-Versand (Retry + persistente Nachliefung) — auch für /notify. */
+  sendText: (chatId: number, text: string) => Promise<void>;
+};
 
 export function createBot(deps: BotDeps): BridgeBot {
   const bot = new Bot(deps.token);
@@ -54,6 +42,23 @@ export function createBot(deps: BotDeps): BridgeBot {
   const pendingGos = new Map<string, (ok: boolean) => void>();
   let busy = false;
   let rejectedCount = 0;
+
+  // Robuster Send-Layer (#198): Retry bei transienten Netzwerkfehlern; scheitern
+  // alle Versuche, landet der Text persistent in pending-replies.json und der
+  // Flush-Timer liefert ihn "(verspätet)" nach — Antworten gehen NIE mehr verloren.
+  const pendingReplies = new PendingReplyStore(deps.pendingPath);
+  const sendText = async (chatId: number, text: string): Promise<void> => {
+    try {
+      await sendWithRetry(() => bot.api.sendMessage(chatId, text));
+    } catch (err) {
+      pendingReplies.add(chatId, text);
+      console.error('Send endgültig fehlgeschlagen — Antwort nach pending-replies.json gelegt:', err);
+    }
+  };
+  // Flush ohne eigenes Retry: klappt der Tick nicht, kommt der nächste in 60 s.
+  startPendingFlush(pendingReplies, async (chatId, text) => {
+    await bot.api.sendMessage(chatId, text);
+  });
 
   // Whitelist: alles andere still verwerfen (nur Zähler, nie Inhalt loggen)
   bot.use(async (ctx, next) => {
@@ -127,11 +132,15 @@ export function createBot(deps: BotDeps): BridgeBot {
       });
       // Versand awaiten statt fire-and-forget: ein Sende-Fehler (429, Netzwerk, …)
       // darf den Prozess nie crashen — im Fehlerfall wird die Runde mit "deny" fortgesetzt.
+      // Mit Retry (#198): eine transiente Netz-Delle soll kein Deny erzwingen; die
+      // Go-Frage ist zeitkritisch (15-min-Timeout), Persistenz ergäbe hier keinen Sinn.
       void (async () => {
         try {
-          const sent = await bot.api.sendMessage(chatId, `🚦 Go nötig für ${toolName}:\n\n${preview}`, {
-            reply_markup: new InlineKeyboard().text('✅ Go', `yes:${id}`).text('❌ Stopp', `no:${id}`),
-          });
+          const sent = await sendWithRetry(() =>
+            bot.api.sendMessage(chatId, `🚦 Go nötig für ${toolName}:\n\n${preview}`, {
+              reply_markup: new InlineKeyboard().text('✅ Go', `yes:${id}`).text('❌ Stopp', `no:${id}`),
+            }),
+          );
           messageId = sent.message_id;
         } catch {
           if (pendingGos.delete(id)) {
@@ -215,13 +224,29 @@ export function createBot(deps: BotDeps): BridgeBot {
       };
 
       const answer = await runTurn({ prompt, state, canUseTool });
-      for (const chunk of chunkMessage(answer)) await replyWithBackoff(ctx, chunk);
-      const sent = await flushOutbox(async (p) => {
-        await ctx.replyWithDocument(new InputFile(p, basename(p)));
-      });
-      if (sent > 0) await ctx.reply(`📎 ${sent} Datei(en) angehängt.`);
+      for (const chunk of chunkMessage(answer)) await sendText(ctx.chat.id, chunk);
+      // Dokument-Anhänge: Retry ja, aber keine Persistenz-Schicht nötig — die Datei
+      // liegt ohnehin im Outbox-Ordner (flushOutbox verschiebt erst NACH erfolgreichem
+      // Send nach sent/), der nächste Turn-Flush nimmt sie automatisch wieder mit.
+      try {
+        const sent = await flushOutbox(async (p) => {
+          await sendWithRetry(() => ctx.replyWithDocument(new InputFile(p, basename(p))));
+        });
+        if (sent > 0) await sendText(ctx.chat.id, `📎 ${sent} Datei(en) angehängt.`);
+      } catch (err) {
+        await sendText(
+          ctx.chat.id,
+          `📎 Datei-Versand fehlgeschlagen (${err instanceof Error ? err.message : String(err)}) — ` +
+            'Datei bleibt in der Outbox und geht beim nächsten Turn mit raus.',
+        );
+      }
     } catch (err) {
-      await ctx.reply(`💥 Fehler: ${err instanceof Error ? err.message : String(err)}\nNotfalls /new probieren.`);
+      // Fehler-Reply ebenfalls über den robusten Layer — Live-Fund 14.07.2026:
+      // genau dieser Reply ging beim SSL/EPROTO-Ausfall mit unter.
+      await sendText(
+        ctx.chat.id,
+        `💥 Fehler: ${err instanceof Error ? err.message : String(err)}\nNotfalls /new probieren.`,
+      );
     } finally {
       clearInterval(typing);
       busy = false;
@@ -233,13 +258,15 @@ export function createBot(deps: BotDeps): BridgeBot {
     // einfaches Tippen erzeugt so den echten Telegram-Reply, den das Routing
     // braucht (Live-Fund Abnahme 11.07.2026: direkt getippte Antworten kamen
     // ohne reply_to_message an und liefen als normaler Agent-Turn).
-    const sent = await bot.api.sendMessage(
-      deps.allowedUserId,
-      `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${text}`,
-      { reply_markup: { force_reply: true } },
+    const sent = await sendWithRetry(() =>
+      bot.api.sendMessage(
+        deps.allowedUserId,
+        `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${text}`,
+        { reply_markup: { force_reply: true } },
+      ),
     );
     questions.register(questionId, sent.message_id, Date.now(), timeoutMin);
   };
 
-  return { bot, sendQuestion };
+  return { bot, sendQuestion, sendText };
 }
