@@ -53,6 +53,10 @@ export async function runTurn(opts: RunTurnOptions): Promise<string> {
       cwd: CWD,
       resume: opts.state.getSessionId(),
       abortController,
+      // Modell-Triage (16.07.2026): Bot-Alltag läuft auf Sonnet statt dem
+      // teuersten Modell; per AGENT_MODEL in .env übersteuerbar
+      // (z. B. AGENT_MODEL=opus für einen Tag mit schweren Aufgaben).
+      model: process.env.AGENT_MODEL ?? 'sonnet',
       // ACHTUNG — zwei bekannte blinde Flecken des Go-Gates (siehe README,
       // Abschnitt "Grenzen des Go-Gates"):
       // 1. `acceptEdits` genehmigt datei-editierende Tools (Write/Edit/…) automatisch
