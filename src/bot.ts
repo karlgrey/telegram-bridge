@@ -8,7 +8,8 @@ import { runTurn, TurnTimeoutError, type CanUseTool } from './agent.js';
 import { saveIncoming, flushOutbox, OUTBOX } from './media.js';
 import { claudeProcessRunning, formatSessions, listSessions } from './sessions.js';
 import { QuestionStore } from './questions.js';
-import { PendingReplyStore, sendWithRetry, startPendingFlush } from './send.js';
+import { PendingReplyStore, sendWithRetry, sendTextRobust, startPendingFlush } from './send.js';
+import { sanitizeText } from './sanitize.js';
 import { TurnQueue } from './queue.js';
 import { logError } from './log.js';
 
@@ -51,15 +52,14 @@ export function createBot(deps: BotDeps): BridgeBot {
   // alle Versuche, landet der Text persistent in pending-replies.json und der
   // Flush-Timer liefert ihn "(verspätet)" nach — Antworten gehen NIE mehr verloren.
   const pendingReplies = new PendingReplyStore(deps.pendingPath);
-  const sendText = async (chatId: number, text: string): Promise<void> => {
-    try {
-      await sendWithRetry(() => bot.api.sendMessage(chatId, text));
-    } catch (err) {
-      pendingReplies.add(chatId, text);
-      logError('Send endgültig fehlgeschlagen — Antwort nach pending-replies.json gelegt:', err);
-    }
-  };
+  // sendTextRobust (send.ts) sanitized den Text zentral gegen lone surrogates,
+  // bevor er die API erreicht — siehe Kommentar dort (Live-Fund 27.07.2026).
+  const sendText = (chatId: number, text: string): Promise<void> =>
+    sendTextRobust(bot.api, pendingReplies, chatId, text, {
+      onError: (err) => logError('Send endgültig fehlgeschlagen — Antwort nach pending-replies.json gelegt:', err),
+    });
   // Flush ohne eigenes Retry: klappt der Tick nicht, kommt der nächste in 60 s.
+  // Text im Store ist bereits sanitized (immer via sendTextRobust befüllt).
   startPendingFlush(pendingReplies, async (chatId, text) => {
     await bot.api.sendMessage(chatId, text);
   });
@@ -286,10 +286,13 @@ export function createBot(deps: BotDeps): BridgeBot {
     // einfaches Tippen erzeugt so den echten Telegram-Reply, den das Routing
     // braucht (Live-Fund Abnahme 11.07.2026: direkt getippte Antworten kamen
     // ohne reply_to_message an und liefen als normaler Agent-Turn).
+    // Auch Fragen sanitizen — kaputte Bytes aus dem Aufrufer dürfen den
+    // Rückfrage-Push nicht mit Telegram-400 killen (#284, 28.07.2026).
+    const cleanText = sanitizeText(text);
     const sent = await sendWithRetry(() =>
       bot.api.sendMessage(
         deps.allowedUserId,
-        `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${text}`,
+        `❓ Rückfrage einer Laptop-Session — antworte einfach auf diese Nachricht:\n\n${cleanText}`,
         { reply_markup: { force_reply: true } },
       ),
     );

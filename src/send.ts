@@ -1,6 +1,7 @@
 import { GrammyError, HttpError } from 'grammy';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { sanitizeText } from './sanitize.js';
 
 // Zentraler Send-Layer (#198): Outbound-Sends retrieten bisher nur bei 429.
 // Live-Fund bridge.log 14.07.2026: SSL/EPROTO bei sendMessage — die Antwort war
@@ -153,4 +154,32 @@ export function startPendingFlush(
   }, intervalMs);
   timer.unref();
   return timer;
+}
+
+export type TelegramTextApi = { sendMessage: (chatId: number, text: string) => Promise<unknown> };
+
+/**
+ * Zentraler Text-Send (#Live-Fund 27.07.2026, 18x "400: Bad Request: strings
+ * must be encoded in UTF-8" in bridge.log): externe Hooks (POST /notify) können
+ * kaputt dekodierte Bytes mit unpaired Surrogates schicken, die Telegram
+ * ablehnt. sanitizeText läuft HIER genau EINMAL, bevor der Text überhaupt an
+ * die API geht — sowohl der Live-Versand als auch (bei endgültigem Scheitern)
+ * der persistierte Pending-Eintrag sind dadurch immer sauber; der spätere
+ * Flush (PendingReplyStore.flush) muss selbst nicht mehr sanitizen, weil im
+ * Store nie unsauberer Text landet.
+ */
+export async function sendTextRobust(
+  api: TelegramTextApi,
+  pending: PendingReplyStore,
+  chatId: number,
+  text: string,
+  opts: RetryOptions & { onError?: (err: unknown) => void } = {},
+): Promise<void> {
+  const clean = sanitizeText(text);
+  try {
+    await sendWithRetry(() => api.sendMessage(chatId, clean), opts);
+  } catch (err) {
+    pending.add(chatId, clean);
+    opts.onError?.(err);
+  }
 }

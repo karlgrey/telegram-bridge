@@ -3,7 +3,7 @@ import { GrammyError, HttpError } from 'grammy';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sendWithRetry, isTransientSendError, PendingReplyStore } from '../src/send.js';
+import { sendWithRetry, isTransientSendError, PendingReplyStore, sendTextRobust } from '../src/send.js';
 
 /** Aufgezeichneter Sleep — Tests laufen ohne echte Wartezeit. */
 function fakeSleep() {
@@ -167,5 +167,32 @@ describe('PendingReplyStore', () => {
     // Datei von Hand kaputt machen
     writeFileSync(file, '{"nicht":"ein array"}');
     expect(new PendingReplyStore(file).list()).toEqual([]);
+  });
+});
+
+describe('sendTextRobust', () => {
+  const setup = () => join(mkdtempSync(join(tmpdir(), 'tb-robust-')), 'pending-replies.json');
+
+  it('bereinigt lone surrogates, bevor der Text die Telegram-API erreicht', async () => {
+    const store = new PendingReplyStore(setup());
+    const received: string[] = [];
+    const api = { sendMessage: async (_chatId: number, text: string) => void received.push(text) };
+    await sendTextRobust(api, store, 123, 'a\udcbbb');
+    expect(received).toEqual(['a�b']);
+  });
+
+  it('legt bei endgültigem Fehlschlag den bereits bereinigten Text im Pending-Store ab', async () => {
+    const store = new PendingReplyStore(setup());
+    const api = { sendMessage: async () => { throw grammy400(); } };
+    await sendTextRobust(api, store, 123, 'a\udcbbb');
+    expect(store.list()).toMatchObject([{ chatId: 123, text: 'a�b' }]);
+  });
+
+  it('ruft onError beim endgültigen Fehlschlag auf', async () => {
+    const store = new PendingReplyStore(setup());
+    const api = { sendMessage: async () => { throw grammy400(); } };
+    const errors: unknown[] = [];
+    await sendTextRobust(api, store, 123, 'x', { onError: (err) => errors.push(err) });
+    expect(errors).toHaveLength(1);
   });
 });
